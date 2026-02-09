@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Routes viewer</title>
+
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.2.1/css/ol.css">
+
+  <style>
+    html, body { margin:0; padding:0; height:100%; }
+    #map { width:100%; height:100%; }
+    .control {
+      position: absolute;
+      top: 70px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(0,0,0,0);
+      padding: 0px;
+      border-radius: 4px;
+      box-shadow: 0 2px 6px rgba(0,0,0,.3);
+    }
+    #popup {
+      position:absolute;
+      background:white;
+      padding:4px;
+      border:1px solid black;
+      display:none;
+      z-index:2000;
+      pointer-events:none;
+      max-width:250px;
+    }
+    .control button { 
+      display:flex; align-items:left; gap:4px; padding:0px 0px; margin:0px 0px 5px; 
+      font-weight:bold; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.2.1/build/ol.js"></script>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="control">
+  <button id="loadBtn">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16">
+      <path d="M4 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H4zm0 1h8a1 1 0 0 1 1 1v1H3V3a1 1 0 0 1 1-1zm8 3v8H4V5h8zm-5 2h2v1H7V7zm0 2h2v1H7V9z"/>
+    </svg>
+    Load JSON <-
+  </button>
+  <button id="start" style="display:flex; align-items:left; gap:4px; padding:0px 0px; margin:0px; font-weight:bold; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer;">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16">
+      <path d="M4 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H4zm0 1h8a1 1 0 0 1 1 1v1H3V3a1 1 0 0 1 1-1zm8 3v8H4V5h8zm-5 2h2v1H7V7zm0 2h2v1H7V9z"/>
+    </svg>
+    Refresh points
+  </button>
+  </button>
+  <span id="fileName" style="margin-left:8px; color:black; font-weight:bold;"></span>
+  
+  <input id="fileInput" type="file" accept=".json" hidden>
+
+  <div style="margin-top:5px; display:flex; gap:4px; align-items:center; color:black;">
+    <label>From: <input type="datetime-local" id="startDate"></label>
+    <label>To: <input type="datetime-local" id="endDate"></label>
+  </div>
+</div>
+
+<div id="popup"></div>
+
+<script>
+const vectorSource = new ol.source.Vector()
+
+function createArrowStyle(feature) {
+  const dir = feature.get('dir') || 0
+  return new ol.style.Style({
+    image: new ol.style.Icon({
+      anchor: [0.5, 0.5],
+      rotateWithView: true,
+      rotation: dir * Math.PI / 180,
+      src: 'data:image/svg+xml;utf8,' + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+          <polygon points="8,0 16,16 8,12 0,16" fill="red"/>
+        </svg>
+      `)
+    })
+  })
+}
+
+const vectorLayer = new ol.layer.Vector({
+  source: vectorSource,
+  style: feature => {
+    const geom = feature.getGeometry().getType()
+    if (geom === 'LineString') {
+      return new ol.style.Style({
+        stroke: new ol.style.Stroke({ width: 3 })
+      })
+    }
+    return createArrowStyle(feature)
+  }
+})
+
+const map = new ol.Map({
+  target: 'map',
+  layers: [
+    new ol.layer.Tile({ source: new ol.source.OSM() }),
+    vectorLayer
+  ],
+  view: new ol.View({
+    center: ol.proj.fromLonLat([6.21645, 50.81652]),
+    zoom: 16
+  })
+})
+
+
+let jsonData = null
+
+
+document.getElementById('loadBtn').onclick = () => document.getElementById('fileInput').click()
+
+document.getElementById('fileInput').onchange = e => {
+  const file = e.target.files[0]
+  if (!file) return
+  document.getElementById('fileName').textContent = file.name
+
+  const reader = new FileReader()
+  reader.onload = () => {
+    jsonData = JSON.parse(reader.result)
+
+
+    const times = []
+    jsonData.routes.forEach(route => {
+      route.events.forEach(ev => times.push(ev.t))
+    })
+    if (times.length > 0) {
+      const minT = new Date(Math.min(...times))
+      const maxT = new Date(Math.max(...times))
+      document.getElementById('startDate').value = minT.toISOString().slice(0,16)
+      document.getElementById('endDate').value   = maxT.toISOString().slice(0,16)
+    }
+  }
+  reader.readAsText(file)
+}
+
+
+document.getElementById('start').onclick = () => {
+  if (jsonData) {
+    const start = new Date(document.getElementById('startDate').value)
+    const end   = new Date(document.getElementById('endDate').value)
+    vectorSource.clear()
+    loadData(jsonData, start, end)
+  }
+}
+
+
+const popup = document.getElementById('popup')
+map.on('pointermove', function(evt) {
+  const feature = map.forEachFeatureAtPixel(evt.pixel, f => f)
+  if (feature && feature.get('desc')) {
+    popup.style.display = 'block'
+    popup.style.left = evt.pixel[0] + 10 + 'px'
+    popup.style.top  = evt.pixel[1] + 10 + 'px'
+    popup.innerHTML = feature.get('desc')
+  } else {
+    popup.style.display = 'none'
+  }
+})
+
+
+function loadData(data, start, end) {
+  vectorSource.clear()
+  const extent = ol.extent.createEmpty()
+
+  data.routes.forEach(route => {
+    // фильтруем события по дате
+    const filteredEvents = route.events.filter(ev => {
+      const t = new Date(ev.t)
+      return t >= start && t <= end
+    })
+
+    if (route.route && filteredEvents.length >= 2) {
+      const coords = decodePolyline(route.route)
+        .map(c => [c[0], c[1]])
+
+        .filter((_, i) => i < filteredEvents.length)
+        .map(c => ol.proj.fromLonLat([c[1], c[0]]))
+      const line = new ol.Feature(new ol.geom.LineString(coords))
+      vectorSource.addFeature(line)
+      ol.extent.extend(extent, line.getGeometry().getExtent())
+    }
+
+
+    filteredEvents.forEach(ev => {
+      const point = new ol.Feature(new ol.geom.Point(ol.proj.fromLonLat([+ev.y, +ev.x])))
+      point.set('dir', ev.dir)
+      point.set('desc', ev.d)
+      vectorSource.addFeature(point)
+      ol.extent.extend(extent, point.getGeometry().getExtent())
+    })
+  })
+
+  map.getView().fit(extent, { padding: [40,40,40,40] })
+}
+
+
+function decodePolyline(str) {
+  let i = 0, lat = 0, lng = 0, res = []
+  while (i < str.length) {
+    let b, shift = 0, result = 0
+    do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5 } while (b >= 0x20)
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1)
+    shift = 0; result = 0
+    do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5 } while (b >= 0x20)
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1)
+    res.push([lat * 1e-5, lng * 1e-5])
+  }
+  return res
+}
+</script>
+
+</body>
+</html>
